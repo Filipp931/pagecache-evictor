@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # GraalVM 25 for native-image (FFM on by default); Gradle daemon on 21.
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Derive version from tag
+        run: echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Build and test
+        run: ./gradlew -Pversion="$RELEASE_VERSION" build
+      - name: Build fat jar and native binary
+        run: ./gradlew -Pversion="$RELEASE_VERSION" :cli:shadowJar :cli:nativeCompile
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          BIN=cli/build/native/nativeCompile/pagecache
+          "$BIN" --version | grep -F "pagecache $RELEASE_VERSION"
+          dd if=/dev/urandom of=/tmp/rel.bin bs=1M count=4 && cat /tmp/rel.bin > /dev/null
+          "$BIN" stat /tmp/rel.bin | grep -Fq "rel.bin"
+          # the fat jar targets Java 22; JAVA_HOME is the Gradle-daemon JDK 21, so run it on GraalVM
+          "$GRAALVM_HOME/bin/java" -jar cli/build/libs/pagecache-"$RELEASE_VERSION".jar --version | grep -F "pagecache $RELEASE_VERSION"
+          "$GRAALVM_HOME/bin/java" -jar cli/build/libs/pagecache-"$RELEASE_VERSION".jar stat /tmp/rel.bin | grep -Fq "rel.bin"
+      - name: Stage assets
+        run: |
+          cp cli/build/native/nativeCompile/pagecache pagecache-linux-amd64
+          cp cli/build/libs/pagecache-"$RELEASE_VERSION".jar pagecache.jar
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pagecache-linux-amd64
+            pagecache.jar
+          generate_release_notes: true
