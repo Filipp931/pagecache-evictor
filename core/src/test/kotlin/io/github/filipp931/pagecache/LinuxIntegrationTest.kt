@@ -85,11 +85,14 @@ class LinuxIntegrationTest {
     @Test
     fun `missing file surfaces errno`() {
         val missing = tempDir.resolve("no-such-file")
+        // residency stats via Files.size first, so the failure carries no errno —
+        // but it must still be the library's exception type
         assertThatThrownBy { ops.residency(missing) }
             .isInstanceOf(PageCacheException::class.java)
-            .matches { (it as PageCacheException).errno != 0 }
+        // advise goes straight to open(2): ENOENT must surface
         assertThatThrownBy { ops.advise(missing, Advice.DONTNEED) }
             .isInstanceOf(PageCacheException::class.java)
+            .matches { (it as PageCacheException).errno != 0 }
         assertThat(ops.tryAdvise(missing, Advice.DONTNEED)).isFalse()
     }
 
